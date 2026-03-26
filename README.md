@@ -28,8 +28,10 @@ You're working on Project A. You say "fix the auth bug in Project B." Claude One
 
 1. Checks your current session — is this about Project A? No.
 2. Finds Project B's sessions — is there one that already worked on auth? Yes.
-3. Checks if it's running — it is. Queues your prompt.
-4. When it finishes — your auth fix runs next, with full context.
+3. Checks if it's running:
+   - **Running** → queues your prompt. When it finishes, your auth fix runs next with full context.
+   - **Idle** → resumes that session with your prompt. It picks up right where it left off.
+   - **No relevant session** → creates a new execution on Project B and runs your prompt there.
 
 You never left Project A. You never opened another terminal.
 
