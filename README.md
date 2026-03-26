@@ -8,20 +8,19 @@ Stop switching terminals. Stop losing context. One session sees everything — y
 
 ## Install
 
-In Claude Code:
-
-```
-/plugin install claude-one@langmartai
-```
-
-Then start the services:
-
 ```bash
 npm install -g lm-assist
-lm-assist start
 ```
 
-Open a **new Claude Code session** and run `/sessions` to verify.
+That's it. Everything is set up automatically — services, statusline, and this plugin.
+
+**Open a new Claude Code session** and type `/sessions` to verify.
+
+Or install the plugin only:
+```
+/plugin marketplace add langmartai/lm-assist
+/plugin install claude-one@langmartai
+```
 
 ## What It Does
 
