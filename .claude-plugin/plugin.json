@@ -1,6 +1,6 @@
 {
   "name": "claude-code-multisession",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "One prompt to control all your Claude Code sessions across every project",
   "author": {
     "name": "langmartai"
