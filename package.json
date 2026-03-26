@@ -1,0 +1,26 @@
+{
+  "name": "claude-one",
+  "version": "0.1.0",
+  "description": "One prompt to control all your Claude Code sessions across every project",
+  "license": "AGPL-3.0-or-later",
+  "repository": "https://github.com/langmartai/claude-one",
+  "homepage": "https://github.com/langmartai/claude-one",
+  "author": {
+    "name": "langmartai"
+  },
+  "keywords": [
+    "claude-code",
+    "agent-sdk",
+    "observability",
+    "session-management",
+    "ai-agents",
+    "claude",
+    "anthropic"
+  ],
+  "dependencies": {
+    "lm-assist": "latest"
+  },
+  "bin": {
+    "claude-one": "./bin/claude-one.js"
+  }
+}

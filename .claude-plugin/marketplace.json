@@ -1,0 +1,22 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "langmartai",
+  "description": "Claude One — one prompt to control all your Claude Code sessions across every project",
+  "owner": {
+    "name": "langmartai"
+  },
+  "metadata": {
+    "description": "Plugins by langmartai",
+    "homepage": "https://github.com/langmartai/claude-one"
+  },
+  "plugins": [
+    {
+      "name": "claude-one",
+      "version": "0.1.0",
+      "source": "./",
+      "description": "One prompt to control all your Claude Code sessions. Monitor costs, debug agents, route work across projects, queue prompts for busy sessions, and auto-learn routing patterns. Powered by lm-assist.",
+      "category": "productivity",
+      "homepage": "https://github.com/langmartai/claude-one"
+    }
+  ]
+}
