@@ -10,8 +10,19 @@ Generate or refresh a summary of THIS session.
 ## Step 1: Gather session data
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/summary-gather.js" "$CLAUDE_SESSION_ID"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/summary-gather.js" "${CLAUDE_SESSION_ID:-$CLAUDE_CODE_SESSION_ID}"
 ```
+
+(Current Claude Code exports the session id as `CLAUDE_CODE_SESSION_ID`; older builds used `CLAUDE_SESSION_ID`.)
+
+If the gathered transcript is too thin to summarize (e.g. a long, tool-heavy session), pull compact conversation detail straight from the API:
+
+```bash
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" \
+  "http://localhost:3100/sessions/${CLAUDE_SESSION_ID:-$CLAUDE_CODE_SESSION_ID}?includeToolResults=true&includeSystemMessages=true"
+```
+
+(`includeToolResults`/`includeSystemMessages` return compact, server-capped `toolResults[]`/`systemMessages[]` arrays — prefer them over `includeRawMessages`, whose raw stream is ~15x the payload for the same data. Prod API `3100`; dev `3200` when `devModeEnabled` is `true` in `~/.claude-code-config.json`.)
 
 ## Step 2: Generate the summary
 
@@ -22,7 +33,7 @@ Analyze the output from Step 1 and generate:
 ## Step 3: Save summary and record learning
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/summary-save.js" "$CLAUDE_SESSION_ID" "YOUR_SUMMARY" "YOUR_DISPLAY_NAME" TURN_COUNT "MAIN_KEYWORD" "PROJECT_AREA"
+node "${CLAUDE_PLUGIN_ROOT}/scripts/summary-save.js" "${CLAUDE_SESSION_ID:-$CLAUDE_CODE_SESSION_ID}" "YOUR_SUMMARY" "YOUR_DISPLAY_NAME" TURN_COUNT "MAIN_KEYWORD" "PROJECT_AREA"
 ```
 
 ## Step 4: Rename session (if needed)

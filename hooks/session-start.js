@@ -1,13 +1,24 @@
 #!/usr/bin/env node
 /**
- * Claude One — SessionStart hook
+ * claude-code-multisession — SessionStart hook
  *
  * Quick health check on session start. If lm-assist API isn't running,
  * suggests running /assist-setup. Non-blocking, silent on success.
  */
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
-const req = http.get('http://127.0.0.1:3100/health', { timeout: 2000 }, (res) => {
+// Dev-aware port: when devModeEnabled is set in ~/.claude-code-config.json,
+// talk to the dev API (3200) instead of prod (3100).
+let port = 3100;
+try {
+  const cfg = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude-code-config.json'), 'utf8'));
+  if (cfg.devModeEnabled) port = 3200;
+} catch { /* no config — use prod */ }
+
+const req = http.get(`http://127.0.0.1:${port}/health`, { timeout: 2000 }, (res) => {
   let data = '';
   res.on('data', c => data += c);
   res.on('end', () => {

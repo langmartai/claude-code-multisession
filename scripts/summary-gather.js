@@ -31,9 +31,11 @@ const projectName = cwd.split('/').pop();
     console.log('No summary exists yet.');
   }
 
-  // Session metadata
+  // Session metadata + compact extras. includeToolResults/includeSystemMessages
+  // return server-capped compact arrays (toolResults[]/systemMessages[]) — the
+  // recommended way to get tool outcomes, ~15x smaller than includeRawMessages.
   console.log('\n--- SESSION METADATA ---');
-  const meta = await api('/sessions/' + sid);
+  const meta = await api('/sessions/' + sid + '?includeToolResults=true&includeSystemMessages=true');
   if (meta?.data) {
     const d = meta.data;
     console.log(`turns=${d.numTurns || 0}`);
@@ -52,10 +54,29 @@ const projectName = cwd.split('/').pop();
     console.log(`${msgs.length} messages`);
     for (const m of msgs) {
       const content = (m.content || '').slice(0, 200);
-      if (m.type === 'human' && content) console.log(`  USER: ${content}`);
-      else if (m.type === 'assistant' && content.length > 50) console.log(`  CLAUDE: ${content.slice(0, 150)}`);
+      if (m.role === 'user' && content) console.log(`  USER: ${content}`);
+      else if (m.role === 'assistant' && content.length > 50) console.log(`  CLAUDE: ${content.slice(0, 150)}`);
     }
   } else {
     console.log('No conversation data available.');
+  }
+
+  // Tool outcomes (compact toolResults[] from the metadata fetch above)
+  const toolResults = meta?.data?.toolResults || [];
+  if (toolResults.length) {
+    console.log('\n--- RECENT TOOL RESULTS ---');
+    for (const t of toolResults.slice(-8)) {
+      const tag = t.isError ? 'ERROR' : 'ok';
+      console.log(`  [${tag}] ${(t.content || '').replace(/\s+/g, ' ').slice(0, 150)}`);
+    }
+  }
+
+  // Compaction summaries carry pre-compaction context the last-20-turns window misses
+  const compactions = (meta?.data?.systemMessages || []).filter(m => m.type === 'summary');
+  if (compactions.length) {
+    console.log('\n--- COMPACTION SUMMARIES ---');
+    for (const m of compactions.slice(-2)) {
+      console.log(`  ${(m.content || '').replace(/\s+/g, ' ').slice(0, 300)}`);
+    }
   }
 })();

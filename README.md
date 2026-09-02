@@ -12,7 +12,7 @@ Stop switching terminals. Stop losing context. One session sees everything — y
 npm install -g lm-assist
 ```
 
-The postinstall script automatically starts services, installs statusline, and this plugin.
+The postinstall script automatically starts services, installs statusline, and this plugin. The current lm-assist line is v0.2.1; this plugin works against lm-assist >= 0.2.x.
 
 **Open a new Claude Code session** and type `/sessions` to verify.
 
@@ -28,7 +28,7 @@ Add the marketplace once — then install any combination of plugins:
 |----------------|-------------|
 | `/plugin install claude-code-multisession@langmartai` | Skills (observe, route) + commands (`/projects`, `/sessions`, `/summary`, `/run`) — cross-project session management |
 | `/plugin install claude-code-webui@langmartai` | Skill (dashboard) + commands (`/web`, `/web-sessions`, `/web-tasks`) — web dashboard access |
-| `/plugin install lm-assist@langmartai` | Commands (`/assist`, `/assist-setup`, `/assist-status`, `/assist-search`, `/assist-logs`) — setup and diagnostics |
+| `/plugin install lm-assist@langmartai` | Commands (`/assist`, `/assist-setup`, `/assist-status`, `/assist-search`, `/assist-logs`, `/assist-mcp-logs`) — setup and diagnostics |
 
 Install all three for the full experience, or pick what you need.
 
@@ -173,6 +173,8 @@ Queued prompts include:
 - **Priority** — high/normal/low (high processes first)
 - **Source** — which session/project queued it
 
+Queued work survives hiccups, too. If the target session stalls on a server or network error, lm-assist auto-resumes it; if it hits a model usage limit, lm-assist switches it to an available model (verified via `/model`) so the queue keeps draining. `GET /monitor/stalls` shows what was rescued and how.
+
 ## Session Intelligence
 
 Claude Code Multisession gets smarter the more you use it.
@@ -203,6 +205,22 @@ my-backend:
   Areas: auth, billing, users, notifications
 ```
 
+### Full-Text Prompt Search
+
+Summaries compress; search remembers. Every user prompt on the node is indexed for full-text search (bm25 ranking, CJK-aware), so the session that already worked on a topic can be found by what was actually said — not just by what a summary kept:
+
+```
+> which session set up the webhook retries?
+
+Full-text search over indexed prompts...
+  payment-webhooks (my-backend) — "add exponential backoff to webhook retries"
+  api-refactor    (my-backend) — "move webhook handler to the queue worker"
+
+Best match: payment-webhooks (idle, 74 turns, $9.80)
+```
+
+Prompts in Chinese, Japanese, or Korean are indexed and matched the same way.
+
 ### Auto-Learning
 
 Keywords, commands, and routing patterns accumulate with frequency counts:
@@ -216,11 +234,65 @@ my-backend:
 
 After enough interactions, routing skips the deep scan entirely — signals already know the answer.
 
+## Walkthroughs
+
+Three things you can ask, end to end. (All sample output is fictional.)
+
+### "Show me the subagents this session spawned"
+
+The **observe** skill answers with each subagent's real type — since lm-assist v0.2.1 subagents report what they actually are, not a generic label:
+
+```
+> show subagents
+
+Subagents for api-refactor (4):
+  Explore          "map the current DI wiring"            done   $0.42
+  Explore          "find circular imports in services/"   done   $0.31
+  code-reviewer    "review the migrated route files"      done   $1.10
+  general-purpose  "update the changelog"                 running
+```
+
+The same real types show up in the web dashboard's Agents view.
+
+### "How much runway do I have?"
+
+Dollar costs (`/projects`, `/sessions`) tell you what you spent; the Claude Code usage windows tell you what you have left. `GET /claude-code/usage` reports both the 5-hour and 7-day windows:
+
+```
+> how close am I to my usage limit?
+
+Claude Code usage:
+  5-hour window:  62% used — resets 16:00
+  7-day window:   31% used — resets Mon 09:00
+
+Plenty of 7-day runway. If you're planning a heavy run, starting it
+after 16:00 opens a fresh 5-hour window.
+```
+
+Routing can use this the same way it uses cost: heavy work goes where the runway is.
+
+### "The session stalled — did my queued prompt die?"
+
+No. Stalled sessions auto-resume, so queued prompts still get processed:
+
+```
+> /run migrate the audit tables        (queued behind api-refactor)
+
+... later ...
+
+Stall monitor (GET /monitor/stalls):
+  api-refactor  14:32  stalled (API 529 overloaded)  -> auto-resumed 14:33
+  api-refactor  15:01  model usage limit             -> verified fallback model
+
+Queue for api-refactor:
+  [normal] migrate the audit tables    processed 15:24
+```
+
 ## Architecture
 
 Claude Code Multisession is powered by [lm-assist](https://github.com/langmartai/lm-assist), which provides:
 
-- **155+ REST API endpoints** for session management, monitoring, and control
+- **860+ REST API endpoints** for session management, monitoring, and control
 - **Next.js web dashboard** with 15 insight views per session
 - **Real-time execution tracking** via SSE streams
 - **Web terminal** access to running Claude Code sessions from any browser
@@ -231,8 +303,9 @@ Claude Code Multisession is powered by [lm-assist](https://github.com/langmartai
 
 | Type | Name | What it does |
 |------|------|-------------|
-| Skill | **observe** | Auto-triggers on "what's running?", "session costs", "show subagents" — full observability |
+| Skill | **observe** | Auto-triggers on "what's running?", "session costs", "show subagents" — full observability, with real subagent types |
 | Skill | **route** | Auto-triggers when prompt mentions another project — evaluates where work belongs |
+| Command | `/projects` | All projects with session counts, costs, summaries |
 | Command | `/sessions` | Quick session list with costs and status |
 | Command | `/summary` | Summarize current session, generate display name |
 | Command | `/run` | Execute an agent with pre-flight checks |
@@ -241,16 +314,22 @@ Claude Code Multisession is powered by [lm-assist](https://github.com/langmartai
 
 Open `http://localhost:3848` for the full web UI with 15 insight views per session:
 
-Chat · Thinking · Agents · Skills · Commands · Tasks · Plans · Team · Files · Git · Console · Summary · Meta · JSON · DB
+Chat · Thinking · Agents · Skills · Commands · Tasks · Plans · Team · Files · Git · Console · FlowGraph · Meta · JSON · DB
 
-Access from your phone, tablet, or any device on your network.
+(Console is hidden on Windows; FlowGraph is experiment-gated.)
+
+Beyond per-session views, the dashboard ships fleet-wide pages — session-dashboard, terminal-dashboard, search, missions, mission-graph, scheduler, memory, backlog, cowork, and more.
+
+Access from your phone, tablet, or any device on your network. `:3848` is the production web port; a from-source dev build serves on `:3948`.
 
 ## Requirements
 
-- Node.js >= 18
+- Node.js >= 20.9
 - Claude Code
-- [lm-assist](https://github.com/langmartai/lm-assist) (installed automatically as dependency)
+- [lm-assist](https://github.com/langmartai/lm-assist) >= 0.2.x (installed automatically as dependency; current line is v0.2.1)
 
 ## License
 
-[AGPL-3.0-or-later](LICENSE)
+[MIT](LICENSE)
+
+The underlying [lm-assist](https://github.com/langmartai/lm-assist) platform is separately licensed AGPL-3.0-or-later.

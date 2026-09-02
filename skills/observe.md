@@ -7,9 +7,17 @@ allowed-tools: Bash
 
 Query sessions, monitor executions, debug agent behavior, and control agent runs through the lm-assist REST API.
 
-**API base:** `http://localhost:3100`
+**API base:** `http://localhost:3100` (prod). If `devModeEnabled` is `true` in `~/.claude-code-config.json`, the dev build serves this machine on `:3200` instead — swap the port in every command below.
 
 All commands use `curl -s` with `--max-time 5`. Parse JSON responses with `python3 -c "import sys,json; ..."`.
+
+**Authentication:** every endpoint except `/health` requires the local API token, sent as a header on each request:
+
+```
+-H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)"
+```
+
+The commands below already include it. A `401 UNAUTHORIZED` response means the header is missing or the token rotated — re-read the token file and retry.
 
 ## Pre-flight: Ensure lm-assist is running
 
@@ -56,7 +64,7 @@ Check what each project is about:
 
 ```bash
 # Get all project summaries
-curl -s http://localhost:3100/projects/summaries | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/projects/summaries | python3 -c "
 import sys,json
 summaries = json.load(sys.stdin).get('data',{}).get('summaries',[])
 for s in summaries:
@@ -68,18 +76,18 @@ If project summaries don't exist yet, generate them by dispatching a background 
 
 ```bash
 # Step 1: Get project list
-curl -s http://localhost:3100/projects | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/projects | python3 -c "
 import sys,json
 projects = json.load(sys.stdin).get('data',{}).get('projects',[])
 for p in projects:
-    name = p.get('projectName','') or p.get('name','')
-    count = p.get('sessionCount',0)
     path = p.get('path','')
+    name = path.rstrip('/').split('/')[-1] or p.get('encodedPath','')
+    count = p.get('sessionCount',0)
     print(f'{name:20} {count:>4} sessions  path={path}')
 "
 
 # Step 2: Check which projects need summaries
-curl -s http://localhost:3100/projects/summaries | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/projects/summaries | python3 -c "
 import sys,json
 existing = {s['projectPath'] for s in json.load(sys.stdin).get('data',{}).get('summaries',[])}
 print(f'Have summaries: {existing}')
@@ -116,9 +124,9 @@ Then save a comprehensive summary via `PUT /projects/summary` with ALL these fie
   "services": "How to start/stop/restart. e.g.: ./core.sh start, ./core.sh stop, ./core.sh status. Ports: API :3100, Web :3848",
   "keyCommands": "Most used commands. e.g.: ./core.sh build, npm install, npm run dev, ./core.sh logs core",
   "structure": "Key directories: core/ (backend API), web/ (Next.js UI), hooks/ (Claude Code hooks), commands/ (slash commands)",
-  "keyEndpoints": "Most important API endpoints. e.g.: GET /health, GET /sessions, GET /monitor/executions, POST /agent/execute",
+  "keyEndpoints": "Most important API endpoints. e.g.: GET /health, GET /sessions, GET /agent/executions, POST /agent/execute",
   "commonWorkflows": "What users do most: 1) Edit TypeScript → ./core.sh build → ./core.sh restart. 2) npm publish for releases. 3) lm-assist upgrade for prod updates",
-  "deployment": "How to deploy: npm publish → lm-assist upgrade on prod. SG instance: ssh opc@213.35.107.246, do NOT auto-deploy. Prod port :3100, dev port :3200",
+  "deployment": "How to deploy: npm publish → lm-assist upgrade on prod. Staging box: ssh deploy@staging.example.com, do NOT auto-deploy. Prod port :3100, dev port :3200",
   "importantNotes": "Critical constraints: Always use ./core.sh, never direct npm/node. Dev/prod run on separate ports. Knowledge system has kill switch.",
   "fullReference": "Complete markdown reference extracted from CLAUDE.md — include service management, port mapping, key API endpoints, deployment steps, and any operational constraints users need daily"
 }
@@ -128,8 +136,8 @@ The `fullReference` field should be a comprehensive markdown block (500-1000 wor
 
 **CRITICAL: Project folder context rules:**
 - Each agent MUST run with `"cwd": "PROJECT_PATH"` — this ensures all file reads, `ls`, `git log`, and scripts execute in the correct project
-- The `projectPath` saved in the summary MUST be the absolute path (e.g. `/home/ubuntu/lm-assist`, not `~/lm-assist` or `lm-assist`)
-- All commands in `services`, `keyCommands`, `commonWorkflows`, `deployment` must be written relative to the project root (e.g. `./core.sh start`, not `/home/ubuntu/lm-assist/core.sh start`) — because they will be run from inside that project directory
+- The `projectPath` saved in the summary MUST be the absolute path (e.g. `/home/user/my-project`, not `~/my-project` or `my-project`)
+- All commands in `services`, `keyCommands`, `commonWorkflows`, `deployment` must be written relative to the project root (e.g. `./core.sh start`, not `/home/user/my-project/core.sh start`) — because they will be run from inside that project directory
 - When another session later uses this summary to run commands, it must `cd` to `projectPath` first or use `--cwd`
 - For the current project, you can read files and run commands directly — no need to dispatch an agent
 
@@ -158,7 +166,7 @@ When the user references a session by name, partial ID, or relative reference, r
 
 1. **Slug match** — if user says a slug name like "silly-plotting-parasol" or a prefix like "silly-plot":
 ```bash
-curl -s http://localhost:3100/projects/sessions | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/projects/sessions | python3 -c "
 import sys,json
 sessions = json.load(sys.stdin).get('data',{}).get('sessions',[])
 q = 'USER_QUERY'.lower()
@@ -170,7 +178,7 @@ for s in matches[:5]:
 
 2. **"last session" / "most recent"** — take first from list (already sorted by lastModified desc).
 
-3. **"the running one"** — use `GET /monitor/executions` and take the matching execution's sessionId.
+3. **"the running one"** — use `GET /agent/executions` (or `isRunning: true` sessions from `GET /projects/sessions`) and take the matching execution's sessionId.
 
 4. **Ambiguous** — if multiple matches, list them and ask the user to pick.
 
@@ -186,7 +194,7 @@ Show sessions for the current project or all projects:
 
 ```bash
 # Current project sessions (replace CWD with actual working directory)
-curl -s "http://localhost:3100/projects/sessions" | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" "http://localhost:3100/projects/sessions" | python3 -c "
 import sys,json
 data = json.load(sys.stdin).get('data',{})
 sessions = data.get('sessions',[])[:15]
@@ -207,11 +215,11 @@ for s in sessions:
 ### List all projects
 
 ```bash
-curl -s http://localhost:3100/projects | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/projects | python3 -c "
 import sys,json
 projects = json.load(sys.stdin).get('data',{}).get('projects',[])
 for p in projects:
-    name = p.get('projectName','') or p.get('name','')
+    name = p.get('path','').rstrip('/').split('/')[-1] or p.get('encodedPath','')
     count = p.get('sessionCount',0)
     print(f'  {count:>4} sessions  {name}')
 "
@@ -219,32 +227,59 @@ for p in projects:
 
 ### Check running executions
 
+Background agent runs (started via `POST /agent/execute` with `"background": true`) are listed by `GET /agent/executions`:
+
 ```bash
-curl -s http://localhost:3100/monitor/executions | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/agent/executions | python3 -c "
 import sys,json
-data = json.load(sys.stdin).get('data',{})
-execs = data.get('executions',[])
+execs = json.load(sys.stdin).get('data',[]) or []
 if not execs:
-    print('No running executions.')
+    print('No executions.')
 else:
     for e in execs:
         eid = e.get('executionId','')[:12]
-        sid = e.get('sessionId','')[:12]
+        sid = (e.get('sessionId') or '')[:12]
         status = e.get('status','')
-        turns = e.get('turnCount',0)
-        cost = e.get('costUsd',0)
-        elapsed = e.get('elapsedMs',0) // 1000
-        mins = elapsed // 60
-        print(f'  {eid}  session:{sid}  {status}  T:{turns}  \${cost:.2f}  {mins}m')
+        run = '[RUN]' if e.get('isRunning') else ''
+        started = (e.get('startedAt') or '')[:19]
+        print(f'  {eid}  session:{sid}  {status:<10} {run}  started {started}')
 "
 ```
 
 ### Monitor summary
 
 ```bash
-curl -s http://localhost:3100/monitor/summary | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/monitor/summary | python3 -c "
 import sys,json; print(json.dumps(json.load(sys.stdin).get('data',{}), indent=2))
 "
+```
+
+### Stalled sessions — auto-resume + model-limit fallback
+
+Sessions stalled on server/network errors are nudged back to life automatically, and a model usage limit triggers a verified `/model` fallback. This endpoint shows both journals:
+
+```bash
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/monitor/stalls | python3 -c "
+import sys,json
+d = json.load(sys.stdin).get('data',{})
+print(f'auto-resume enabled: {d.get(\"enabled\")}  attempts: {d.get(\"attempts\",0)}  gave up: {d.get(\"gaveUp\",0)}')
+for s in d.get('sessions',[])[:10]:
+    flag = '  GAVE UP' if s.get('gaveUp') else ''
+    print(f'  {s.get(\"key\",\"\")}  [{s.get(\"category\",\"\")}]  attempts:{s.get(\"attempts\",0)}{flag}')
+mf = d.get('modelFallback',{})
+print(f'model fallback enabled: {mf.get(\"enabled\")}  -> {mf.get(\"fallbackModel\",\"\")}')
+for sw in mf.get('switches',[])[:5]:
+    print(f'  {sw.get(\"key\",\"\")}: {sw.get(\"from\",\"\")} -> {sw.get(\"to\",\"\")}  verified:{sw.get(\"verified\")}')
+"
+```
+
+### Claude Code usage windows
+
+Before dispatching a batch of agents, check how much of the account's rate-limit windows (5-hour and 7-day) is already used:
+
+```bash
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/claude-code/usage | python3 -c "
+import sys,json; print(json.dumps(json.load(sys.stdin).get('data',{}), indent=2))"
 ```
 
 ---
@@ -256,7 +291,7 @@ import sys,json; print(json.dumps(json.load(sys.stdin).get('data',{}), indent=2)
 Get full session data (replace SESSION_ID with the resolved ID):
 
 ```bash
-curl -s "http://localhost:3100/sessions/SESSION_ID" | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" "http://localhost:3100/sessions/SESSION_ID" | python3 -c "
 import sys,json
 d = json.load(sys.stdin).get('data',{})
 print(f'Session: {d.get(\"slug\") or d.get(\"sessionId\",\"\")[:12]}')
@@ -265,7 +300,7 @@ print(f'  Status: {d.get(\"status\",\"-\")}')
 print(f'  Model: {d.get(\"model\",\"-\")}')
 print(f'  Cost: \${d.get(\"totalCostUsd\",0):.4f}')
 print(f'  Turns: {d.get(\"numTurns\",0)}')
-print(f'  Duration: {(d.get(\"duration\",0) or 0)//1000}s')
+print(f'  Duration: {(d.get(\"durationMs\",0) or 0)//1000}s')
 print(f'  Claude Code: {d.get(\"claudeCodeVersion\",\"-\")}')
 print(f'  Permission: {d.get(\"permissionMode\",\"-\")}')
 print(f'  Team: {d.get(\"teamName\",\"-\")}')
@@ -285,53 +320,54 @@ if plans:
 "
 ```
 
+When a chat-style view needs tool outputs, add `includeToolResults=true` / `includeSystemMessages=true` to `GET /sessions/SESSION_ID` — they return compact, server-capped `toolResults[]` / `systemMessages[]` arrays at a fraction of the raw-message payload. Never use `includeRawMessages` for chat views.
+
 ### Session conversation
 
 ```bash
-curl -s "http://localhost:3100/sessions/SESSION_ID/conversation?toolDetail=summary&lastN=20" | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" "http://localhost:3100/sessions/SESSION_ID/conversation?toolDetail=summary&lastN=20" | python3 -c "
 import sys,json
 d = json.load(sys.stdin).get('data',{})
 messages = d.get('messages',[])
 for m in messages[-20:]:
-    role = m.get('type','')
+    role = m.get('role','')
     content = (m.get('content','') or '')[:200]
-    if role == 'human':
+    if role == 'user':
         print(f'\n> USER: {content}')
     elif role == 'assistant':
         print(f'  CLAUDE: {content}')
-    elif role == 'tool':
-        tool = m.get('toolName','')
-        print(f'  [{tool}] {content[:100]}')
+        for tc in m.get('toolCalls') or []:
+            print(f'  [{tc.get(\"name\",\"\")}] {(tc.get(\"resultSummary\") or \"\")[:100]}')
 "
 ```
 
 ### Subagent hierarchy
 
 ```bash
-curl -s "http://localhost:3100/sessions/SESSION_ID/subagents" | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" "http://localhost:3100/sessions/SESSION_ID/subagents" | python3 -c "
 import sys,json
 d = json.load(sys.stdin).get('data',{})
-agents = d.get('subagents') or d.get('invocations') or []
+agents = d.get('invocations') or []
 if not agents:
     print('No subagents in this session.')
 else:
     for a in agents:
-        name = a.get('name') or a.get('agentName','?')
-        atype = a.get('type') or a.get('agentType','')
+        aid = a.get('agentId','?')
+        atype = a.get('type','')  # real agent type: Explore, Plan, Bash, general-purpose, ...
         status = a.get('status','')
-        prompt = (a.get('prompt','') or '')[:80]
-        print(f'  {name} ({atype}) [{status}] — {prompt}')
+        desc = a.get('description') or (a.get('prompt','') or '')[:80]
+        print(f'  {aid} ({atype}) [{status}] — {desc}')
 "
 ```
 
 ### Session DAG
 
 ```bash
-curl -s "http://localhost:3100/sessions/SESSION_ID/session-dag" | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" "http://localhost:3100/sessions/SESSION_ID/session-dag" | python3 -c "
 import sys,json
-d = json.load(sys.stdin).get('data',{})
-nodes = d.get('nodes',[])
-edges = d.get('edges',[])
+g = json.load(sys.stdin).get('data',{}).get('graph',{})
+nodes = g.get('nodes',[])
+edges = g.get('edges',[])
 print(f'Session DAG: {len(nodes)} nodes, {len(edges)} edges')
 for n in nodes[:20]:
     ntype = n.get('type','')
@@ -345,10 +381,10 @@ for n in nodes[:20]:
 ### Related sessions
 
 ```bash
-curl -s "http://localhost:3100/sessions/SESSION_ID/related" | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" "http://localhost:3100/sessions/SESSION_ID/related" | python3 -c "
 import sys,json
 d = json.load(sys.stdin).get('data',{})
-for key in ['parent','forks','subagents','siblings']:
+for key in ['parent','children','siblings','forkedFrom','forkChildren']:
     items = d.get(key)
     if items:
         if isinstance(items, list):
@@ -371,14 +407,14 @@ Before executing, ALWAYS check for running executions first:
 
 ```bash
 # Step 1: Check running executions
-curl -s http://localhost:3100/monitor/executions | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/agent/executions | python3 -c "
 import sys,json
-execs = json.load(sys.stdin).get('data',{}).get('executions',[])
+execs = json.load(sys.stdin).get('data',[]) or []
 running = [e for e in execs if e.get('isRunning')]
 if running:
     print(f'WARNING: {len(running)} execution(s) already running:')
     for e in running:
-        print(f'  {e.get(\"executionId\",\"\")[:12]} T:{e.get(\"turnCount\",0)} \${e.get(\"costUsd\",0):.2f}')
+        print(f'  {e.get(\"executionId\",\"\")[:12]}  {e.get(\"status\",\"\")}')
     print('Ask user before proceeding.')
 else:
     print('No running executions. Safe to proceed.')
@@ -386,10 +422,11 @@ else:
 ```
 
 ```bash
-# Step 2: Execute (replace PROMPT and CWD)
-curl -s -X POST http://localhost:3100/agent/execute \
+# Step 2: Execute (replace PROMPT and CWD). "background": true returns immediately
+# with an executionId; WITHOUT it the call blocks until the agent finishes.
+curl -s -X POST -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/agent/execute \
   -H 'Content-Type: application/json' \
-  -d '{"prompt":"FORMATTED_PROMPT","cwd":"PROJECT_CWD"}' | python3 -c "
+  -d '{"prompt":"FORMATTED_PROMPT","cwd":"PROJECT_CWD","background":true}' | python3 -c "
 import sys,json
 d = json.load(sys.stdin)
 if d.get('success'):
@@ -402,11 +439,11 @@ else:
 
 ```bash
 # Step 3: Confirm started (wait 3s, then check)
-sleep 3 && curl -s http://localhost:3100/monitor/executions | python3 -c "
+sleep 3 && curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/agent/executions | python3 -c "
 import sys,json
-execs = json.load(sys.stdin).get('data',{}).get('executions',[])
+execs = json.load(sys.stdin).get('data',[]) or []
 for e in execs:
-    print(f'  {e.get(\"executionId\",\"\")[:12]}  {e.get(\"status\",\"\")}  T:{e.get(\"turnCount\",0)}')
+    print(f'  {e.get(\"executionId\",\"\")[:12]}  {e.get(\"status\",\"\")}  running:{e.get(\"isRunning\")}')
 "
 ```
 
@@ -417,26 +454,23 @@ When formatting the prompt, expand the user's casual intent into clear, actionab
 ### Abort execution
 
 ```bash
-curl -s -X POST http://localhost:3100/monitor/abort/EXECUTION_ID | python3 -c "
+curl -s -X POST -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/agent/execution/EXECUTION_ID/abort | python3 -c "
 import sys,json; d=json.load(sys.stdin); print('Aborted' if d.get('success') else f'Failed: {d.get(\"error\",{}).get(\"message\",\"\")}')"
 ```
 
-### Abort all executions
-
-```bash
-curl -s -X POST http://localhost:3100/monitor/abort-all | python3 -c "
-import sys,json; d=json.load(sys.stdin); print(json.dumps(d.get('data',{}), indent=2))"
-```
+There is no abort-all for background agent executions — list them with `GET /agent/executions` and abort each running one individually.
 
 ### Cache management
 
 ```bash
-# Warm session cache (pre-load for faster queries)
-curl -s -X POST http://localhost:3100/session-cache/warm | python3 -c "
+# Warm session cache for a project (pre-load for faster queries) — projectPath is REQUIRED
+curl -s -X POST -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/session-cache/warm \
+  -H 'Content-Type: application/json' \
+  -d '{"projectPath":"PROJECT_PATH"}' | python3 -c "
 import sys,json; d=json.load(sys.stdin); print(f'Warmed: {json.dumps(d.get(\"data\",{}))}')"
 
 # Clear all caches
-curl -s -X POST http://localhost:3100/session-cache/clear | python3 -c "
+curl -s -X POST -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/session-cache/clear | python3 -c "
 import sys,json; d=json.load(sys.stdin); print(f'Cleared: {json.dumps(d.get(\"data\",{}))}')"
 ```
 
@@ -450,7 +484,7 @@ When you need to understand what sessions are doing (e.g., before deciding to re
 ### Step 1: Check which sessions need summaries
 
 ```bash
-curl -s http://localhost:3100/sessions/summaries/needs-update?maxAgeDays=5 | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/sessions/summaries/needs-update?maxAgeDays=5 | python3 -c "
 import sys,json
 data = json.load(sys.stdin).get('data',{})
 sessions = data.get('sessions',[])
@@ -475,25 +509,25 @@ For each session that needs a summary, read its conversation and write a summary
 ```bash
 # Read conversation for a session (new sessions: read all; stale: read from last summarized turn)
 # For NEW summary (no existing):
-curl -s "http://localhost:3100/sessions/SESSION_ID/conversation?toolDetail=summary&lastN=30" | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" "http://localhost:3100/sessions/SESSION_ID/conversation?toolDetail=summary&lastN=30" | python3 -c "
 import sys,json
 d = json.load(sys.stdin).get('data',{})
 messages = d.get('messages',[])
 for m in messages:
-    role = m.get('type','')
+    role = m.get('role','')
     content = (m.get('content','') or '')[:300]
-    if role == 'human':
+    if role == 'user':
         print(f'USER: {content}')
     elif role == 'assistant':
         print(f'CLAUDE: {content[:200]}')
-    elif role == 'tool':
-        print(f'  [{m.get(\"toolName\",\"\")}]')
+        for tc in m.get('toolCalls') or []:
+            print(f'  [{tc.get(\"name\",\"\")}]')
 "
 ```
 
 ```bash
 # For STALE summary (update from turn N):
-curl -s "http://localhost:3100/sessions/SESSION_ID?fromTurnIndex=LAST_TURN&unlimited=true" | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" "http://localhost:3100/sessions/SESSION_ID?fromTurnIndex=LAST_TURN&unlimited=true" | python3 -c "
 import sys,json
 d = json.load(sys.stdin).get('data',{})
 prompts = d.get('userPrompts',[])
@@ -522,7 +556,7 @@ Follow Claude Code's naming style but make it meaningful instead of random:
 | silly-plotting-parasol | trade-delta-analysis |
 | refactored-twirling-karp | observability-skill-impl |
 | toasty-dancing-teapot | skill-validation-test |
-| warm-herding-bubble | xeenhub-review |
+| warm-herding-bubble | payment-flow-review |
 
 Rules for displayName:
 - 2-4 words, kebab-case (lowercase, hyphens)
@@ -545,7 +579,7 @@ Rules for displayName:
 Save the summary (for both current and other sessions):
 
 ```bash
-curl -s -X PUT "http://localhost:3100/sessions/SESSION_ID/summary" \
+curl -s -X PUT -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" "http://localhost:3100/sessions/SESSION_ID/summary" \
   -H 'Content-Type: application/json' \
   -d '{
     "summary": "YOUR_GENERATED_SUMMARY",
@@ -568,7 +602,7 @@ For the current session only, also rename it:
 When the user wants to run a new task, check existing summaries first:
 
 ```bash
-curl -s http://localhost:3100/sessions/summaries | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/sessions/summaries | python3 -c "
 import sys,json
 summaries = json.load(sys.stdin).get('data',{}).get('summaries',[])
 for s in summaries[:10]:
@@ -598,7 +632,7 @@ Read the summary and understand WHAT the session did, then decide:
 - The session's work is a reference but the new task diverges significantly
 - The session is still running — fork to work in parallel without interfering
 - Example: session implemented feature A → new task is feature B in same area. Fork: share context but don't mix histories.
-- Command: `claude --resume SESSION_ID --fork`
+- Command: `claude --resume SESSION_ID --fork-session`
 
 **NEW** — when no session's work meaningfully overlaps with the new task.
 - The summaries don't match the new task's domain
@@ -621,7 +655,7 @@ Recommendation: RESUME/FORK/NEW/QUEUE
 Reason: WHY this is the right choice
 
 To resume:  claude --resume SESSION_ID
-To fork:    claude --resume SESSION_ID --fork
+To fork:    claude --resume SESSION_ID --fork-session
 ```
 
 Let the user decide — always present the option, never auto-resume without asking.
@@ -635,7 +669,7 @@ When the recommendation is QUEUE (session is running), store the prompt:
 # (same as /run prompt formatting — expand casual intent into clear instructions)
 
 # Step 2: Queue it
-curl -s -X POST "http://localhost:3100/sessions/SESSION_ID/queue" \
+curl -s -X POST -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" "http://localhost:3100/sessions/SESSION_ID/queue" \
   -H 'Content-Type: application/json' \
   -d '{
     "originalIntent": "WHAT THE USER SAID",
@@ -654,7 +688,7 @@ The `contextHint` is important — it tells the session what to be aware of when
 
 ```bash
 # List all pending prompts across all sessions
-curl -s http://localhost:3100/sessions/queue | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/sessions/queue | python3 -c "
 import sys,json
 data = json.load(sys.stdin).get('data',{})
 prompts = data.get('prompts',[])
@@ -671,7 +705,7 @@ else:
 "
 
 # List queue for a specific session
-curl -s http://localhost:3100/sessions/SESSION_ID/queue | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/sessions/SESSION_ID/queue | python3 -c "
 import sys,json
 data = json.load(sys.stdin).get('data',{})
 for p in data.get('prompts',[]):
@@ -682,7 +716,7 @@ for p in data.get('prompts',[]):
 "
 
 # Get next prompt to process (when session finishes current work)
-curl -s http://localhost:3100/sessions/SESSION_ID/queue/next
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/sessions/SESSION_ID/queue/next
 ```
 
 ### Processing queued prompts
@@ -712,7 +746,7 @@ After EVERY routing decision or session query, emit learning signals so summarie
 
 ```bash
 # Record what was learned from this interaction
-curl -s -X POST http://localhost:3100/learn \
+curl -s -X POST -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/learn \
   -H 'Content-Type: application/json' \
   -d '{
     "signals": [
@@ -732,7 +766,7 @@ curl -s -X POST http://localhost:3100/learn \
 | User runs a command | `command: "./core.sh build"` for the project |
 | User queries an endpoint | `endpoint: "GET /sessions"` for the project |
 | Routing decision made | `routing: "delta analysis → trade-delta-analysis session"` |
-| User says "no, wrong project" | `correction: "regime analysis is NOT lm-assist, IS lm-unified-trade"` |
+| User says "no, wrong project" | `correction: "billing reports are NOT web-app, they belong to analytics-service"` |
 | User works in a specific area | `area: "web UI"` or `area: "analysis pipeline"` |
 
 **How learning improves routing over time:**
@@ -741,7 +775,7 @@ When regenerating project summaries, include accumulated signals:
 
 ```bash
 # Get learning context for a project before regenerating its summary
-curl -s "http://localhost:3100/learn/project/$(python3 -c 'import urllib.parse; print(urllib.parse.quote("/home/ubuntu/lm-assist"))')" | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" "http://localhost:3100/learn/project/$(python3 -c 'import urllib.parse; print(urllib.parse.quote("/home/user/my-project"))')" | python3 -c "
 import sys,json
 data = json.load(sys.stdin).get('data',{})
 print(f'Signals: {data.get(\"total\",0)}')
@@ -771,7 +805,7 @@ The `context` string can be included in the project summary agent's prompt so it
 
 ```bash
 # Cost breakdown across all projects
-curl -s http://localhost:3100/projects/costs | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/projects/costs | python3 -c "
 import sys,json
 data = json.load(sys.stdin).get('data',{})
 for p in data.get('projects',[]):
@@ -785,8 +819,10 @@ for p in data.get('projects',[]):
 ### Search sessions by content
 
 ```bash
-# Find sessions mentioning a specific topic
-curl -s "http://localhost:3100/session-search?q=SEARCH_TERM&limit=10" | python3 -c "
+# Find sessions mentioning a specific topic. The param is `query` (not `q`);
+# ranked bm25 full-text search over user prompts (FTS5, CJK-aware). Optional:
+# scope (e.g. 7d/30d/all) and projectPath filters.
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" "http://localhost:3100/session-search?query=SEARCH_TERM&limit=10" | python3 -c "
 import sys,json
 results = json.load(sys.stdin).get('data',{}).get('results',[])
 for r in results:
@@ -796,24 +832,27 @@ for r in results:
     print(f'  {sid} (score:{score:.2f}) {snippet}')
 "
 
-# Recent sessions (last N days)
-curl -s "http://localhost:3100/session-search/recent?days=3" | python3 -c "
+# Recent sessions (newest first, top 50; optional projectPath filter)
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" "http://localhost:3100/session-search/recent" | python3 -c "
 import sys,json
-sessions = json.load(sys.stdin).get('data',{}).get('sessions',[])
-print(f'{len(sessions)} sessions in last 3 days')
+results = json.load(sys.stdin).get('data',{}).get('results',[])
+print(f'{len(results)} recent sessions')
 "
 ```
 
 ### Skills analytics — which skills/commands are used most
 
 ```bash
-curl -s http://localhost:3100/skills/analytics | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/skills/analytics | python3 -c "
 import sys,json
 data = json.load(sys.stdin).get('data',{})
-for s in data.get('skills',[])[:10]:
-    name = s.get('name','')
-    count = s.get('count',0)
-    print(f'  {name:30} {count}x')
+for s in data.get('top10',[]):
+    name = s.get('skillName','')
+    count = s.get('totalInvocations',0)
+    ok = s.get('successCount',0)
+    print(f'  {name:30} {count}x  ({ok} ok)')
+overall = data.get('overall',{})
+print(f'  total: {overall.get(\"totalInvocations\",0)} invocations across {overall.get(\"totalSkills\",0)} skills')
 "
 ```
 
@@ -821,7 +860,7 @@ for s in data.get('skills',[])[:10]:
 
 ```bash
 # All tasks with status
-curl -s http://localhost:3100/task-store/tasks | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/task-store/tasks | python3 -c "
 import sys,json
 tasks = json.load(sys.stdin).get('data',{}).get('tasks',[])
 for t in tasks[:15]:
@@ -832,7 +871,7 @@ for t in tasks[:15]:
 "
 
 # Ready tasks (unblocked, actionable)
-curl -s http://localhost:3100/task-store/tasks/ready | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/task-store/tasks/ready | python3 -c "
 import sys,json
 tasks = json.load(sys.stdin).get('data',{}).get('tasks',[])
 print(f'{len(tasks)} ready tasks')
@@ -844,7 +883,7 @@ for t in tasks[:10]:
 ### Plans
 
 ```bash
-curl -s http://localhost:3100/plans | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" http://localhost:3100/plans | python3 -c "
 import sys,json
 plans = json.load(sys.stdin).get('data',{}).get('plans',[])
 for p in plans:
@@ -857,14 +896,14 @@ for p in plans:
 
 ```bash
 # Search within a specific session's conversation
-curl -s "http://localhost:3100/sessions/SESSION_ID/conversation?toolDetail=summary&lastN=50" | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" "http://localhost:3100/sessions/SESSION_ID/conversation?toolDetail=summary&lastN=50" | python3 -c "
 import sys,json
 msgs = json.load(sys.stdin).get('data',{}).get('messages',[])
 term = 'SEARCH_TERM'.lower()
 for m in msgs:
     content = (m.get('content','') or '').lower()
     if term in content:
-        role = m.get('type','')
+        role = m.get('role','')
         text = m.get('content','')[:200]
         print(f'  [{role}] {text}')
 "
@@ -874,7 +913,7 @@ for m in msgs:
 
 ```bash
 # Get full project reference including services, commands, deployment
-curl -s "http://localhost:3100/projects/summaries" | python3 -c "
+curl -s -H "x-api-key: $(cat "${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" "http://localhost:3100/projects/summaries" | python3 -c "
 import sys,json
 for s in json.load(sys.stdin).get('data',{}).get('summaries',[]):
     print(f'=== {s[\"projectName\"]} ===')

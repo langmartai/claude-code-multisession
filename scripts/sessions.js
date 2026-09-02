@@ -13,7 +13,7 @@ const filter = process.argv[2] || '';
 
   if (filter) {
     sessions = sessions.filter(s =>
-      ((s.projectPath || '') + (s.projectName || '')).toLowerCase().includes(filter.toLowerCase())
+      (s.projectPath || '').toLowerCase().includes(filter.toLowerCase())
     );
   }
 
@@ -31,7 +31,7 @@ const filter = process.argv[2] || '';
     const status = s.isRunning ? '[RUN]' : '';
     const name = (s.customTitle || s.slug || s.sessionId.slice(0, 12)).slice(0, 26);
     const project = ((s.projectPath || '').split('/').pop() || '-').slice(0, 16);
-    const model = (s.model || '-').replace('claude-', '').replace('opus-4-6', 'opus').replace('sonnet-4-6', 'sonnet').slice(0, 7);
+    const model = (s.model || '-').replace('claude-', '').replace(/^(opus|sonnet|haiku|fable)[-\d.]*.*$/, '$1').slice(0, 7);
     const cost = fmt.cost(s.totalCostUsd);
     const turns = String(s.numTurns || '-');
     console.log(fmt.hdr(status, 7) + fmt.hdr(name, 28) + fmt.hdr(project, 18) + fmt.hdr(model, 8) + fmt.rgt(cost, 8) + fmt.rgt(turns, 6));
@@ -53,7 +53,43 @@ const filter = process.argv[2] || '';
     }
   }
 
+  // Stalled sessions + model-limit fallback (GET /monitor/stalls)
+  const stalls = await api('/monitor/stalls');
+  if (stalls?.data) {
+    const d = stalls.data;
+    const n = (d.sessions || []).length;
+    if (n > 0) {
+      const gaveUp = d.gaveUp ? `, ${d.gaveUp} gave up` : '';
+      console.log(`\nStalled: ${n} (auto-resume ${d.enabled ? 'armed' : 'off'}${gaveUp})`);
+    }
+    const switches = d.modelFallback?.switches?.length || 0;
+    if (switches) console.log(`Model fallback: ${switches} switch(es) to ${d.modelFallback.fallbackModel}`);
+  }
+
   const totalCost = sessions.reduce((a, s) => a + (s.totalCostUsd || 0), 0);
   console.log(fmt.line());
   console.log(`Total cost: $${totalCost.toFixed(2)}`);
+  const usage = await usageLine();
+  if (usage) console.log(usage);
 })();
+
+// Claude Code usage windows (GET /claude-code/usage) — budget context for the cost total.
+async function usageLine() {
+  const u = await api('/claude-code/usage');
+  const d = u?.data;
+  if (!d) return null;
+  const parts = [];
+  const limits = (d.limits || []).filter(l => typeof l.percent === 'number');
+  if (limits.length) {
+    for (const l of limits) {
+      const label = l.kind === 'session' ? '5h'
+        : l.scope?.model?.display_name ? `7d ${l.scope.model.display_name}`
+        : l.kind === 'weekly_all' ? '7d' : (l.kind || l.group || 'window');
+      parts.push(`${label} ${l.percent}%`);
+    }
+  } else {
+    if (d.five_hour) parts.push(`5h ${d.five_hour.utilization ?? '?'}%`);
+    if (d.seven_day) parts.push(`7d ${d.seven_day.utilization ?? '?'}%`);
+  }
+  return parts.length ? `Usage window: ${parts.join(' | ')} used` : null;
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-const { api, checkHealth, fmt } = require('./api');
+const { api, checkHealth, fmt, PORT } = require('./api');
 const cwd = process.cwd();
 
 (async () => {
@@ -30,7 +30,8 @@ const cwd = process.cwd();
 
   for (const p of projects) {
     const path = p.path || p.projectPath || '';
-    const name = (p.projectName || p.name || path.split('/').pop() || '?').slice(0, 20);
+    // Projects carry no name field — derive the display name from the path.
+    const name = (path.split('/').pop() || '?').slice(0, 20);
     const sessions = String(p.sessionCount || 0);
     const c = costMap[path];
     const cost = c ? fmt.cost(c.totalCostUsd) : '-';
@@ -53,6 +54,8 @@ const cwd = process.cwd();
   const totalCost = Object.values(costMap).reduce((a, p) => a + (p.totalCostUsd || 0), 0);
   const totalSessions = projects.reduce((a, p) => a + (p.sessionCount || 0), 0);
   console.log('   Total' + ' '.repeat(14) + fmt.rgt(String(totalSessions), 9) + fmt.rgt(fmt.cost(totalCost), 10));
+  const usage = await usageLine();
+  if (usage) console.log('   ' + usage);
   console.log();
   console.log(' * = current project');
 
@@ -62,13 +65,34 @@ const cwd = process.cwd();
     console.log(`Generating summaries for ${missing.length} project(s) in background...`);
     for (const m of missing) {
       api('/agent/execute', 'POST', {
-        prompt: 'Generate a project summary. Read CLAUDE.md if it exists, check package.json, scan directories, check scripts and configs. Then save via: curl -s -X PUT http://localhost:3100/projects/summary -H "Content-Type: application/json" -d with projectPath, projectName, summary, stack, areas, recentFocus, services, keyCommands, structure, deployment, importantNotes, fullReference. Be thorough.',
+        prompt: `Generate a project summary. Read CLAUDE.md if it exists, check package.json, scan directories, check scripts and configs. Then save via: curl -s -X PUT http://localhost:${PORT}/projects/summary -H "Content-Type: application/json" -H "x-api-key: $(cat "\${LM_ASSIST_DATA_DIR:-$HOME/.lm-assist}/api-token" 2>/dev/null)" -d with projectPath, projectName, summary, stack, areas, recentFocus, services, keyCommands, structure, deployment, importantNotes, fullReference. Be thorough.`,
         cwd: m.path,
         permissionMode: 'bypassPermissions',
         maxTurns: 10,
         background: true,
       }).catch(() => {});
     }
-    console.log('Run /projects again in ~30s to see summaries.');
+    console.log('Run /projects again in a minute or two to see summaries.');
   }
 })();
+
+// Claude Code usage windows (GET /claude-code/usage) — budget context for the cost total.
+async function usageLine() {
+  const u = await api('/claude-code/usage');
+  const d = u?.data;
+  if (!d) return null;
+  const parts = [];
+  const limits = (d.limits || []).filter(l => typeof l.percent === 'number');
+  if (limits.length) {
+    for (const l of limits) {
+      const label = l.kind === 'session' ? '5h'
+        : l.scope?.model?.display_name ? `7d ${l.scope.model.display_name}`
+        : l.kind === 'weekly_all' ? '7d' : (l.kind || l.group || 'window');
+      parts.push(`${label} ${l.percent}%`);
+    }
+  } else {
+    if (d.five_hour) parts.push(`5h ${d.five_hour.utilization ?? '?'}%`);
+    if (d.seven_day) parts.push(`7d ${d.seven_day.utilization ?? '?'}%`);
+  }
+  return parts.length ? `Usage window: ${parts.join(' | ')} used` : null;
+}
